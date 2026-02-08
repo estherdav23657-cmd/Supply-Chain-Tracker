@@ -6,6 +6,7 @@
 (define-constant err-invalid-status (err u104))
 (define-constant err-manufacturer-only (err u105))
 (define-constant err-product-recalled (err u106))
+(define-constant err-inspector-only (err u107))
 
 (define-data-var last-product-id uint u0)
 
@@ -41,9 +42,21 @@
     }
 )
 
+
 (define-map product-history-count
     uint
     uint
+)
+
+(define-map quality-certifications
+    uint
+    {
+        inspector: principal,
+        certification-type: (string-ascii 50),
+        rating: uint,
+        notes: (string-ascii 100),
+        timestamp: uint,
+    }
 )
 
 (define-public (add-participant
@@ -276,4 +289,41 @@
         product-data (ok (get status product-data))
         err-not-found
     )
+)
+
+(define-public (certify-product
+        (product-id uint)
+        (certification-type (string-ascii 50))
+        (rating uint)
+        (notes (string-ascii 100))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+            (participant (unwrap! (map-get? participants sender) err-unauthorized))
+        )
+        (asserts! (is-eq (get active participant) true) err-unauthorized)
+        (asserts! (is-eq (get role participant) "INSPECTOR") err-inspector-only)
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
+
+        (map-set quality-certifications product-id {
+            inspector: sender,
+            certification-type: certification-type,
+            rating: rating,
+            notes: notes,
+            timestamp: burn-block-height,
+        })
+
+        (print {
+            event: "certify",
+            product-id: product-id,
+            inspector: sender,
+            rating: rating,
+        })
+        (ok true)
+    )
+)
+
+(define-read-only (get-certification (product-id uint))
+    (map-get? quality-certifications product-id)
 )

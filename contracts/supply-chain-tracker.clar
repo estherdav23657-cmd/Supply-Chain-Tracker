@@ -4,6 +4,8 @@
 (define-constant err-already-exists (err u102))
 (define-constant err-unauthorized (err u103))
 (define-constant err-invalid-status (err u104))
+(define-constant err-manufacturer-only (err u105))
+(define-constant err-product-recalled (err u106))
 
 (define-data-var last-product-id uint u0)
 
@@ -117,6 +119,7 @@
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
         (asserts! (is-eq (get active sender-participant) true) err-unauthorized)
         (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
 
         (map-set products product-id
             (merge product {
@@ -158,6 +161,7 @@
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
         (asserts! (is-eq (get active participant) true) err-unauthorized)
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
 
         (map-set products product-id
             (merge product {
@@ -180,6 +184,41 @@
             event: "status-update",
             product-id: product-id,
             status: new-status,
+        })
+        (ok true)
+    )
+)
+
+(define-public (recall-product (product-id uint))
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+            (current-history-count (default-to u0 (map-get? product-history-count product-id)))
+        )
+        (asserts! (is-eq (get manufacturer product) sender) err-manufacturer-only)
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
+
+        (map-set products product-id
+            (merge product {
+                status: "RECALLED",
+                timestamp: burn-block-height,
+            })
+        )
+
+        (map-set product-history {
+            product-id: product-id,
+            index: current-history-count,
+        } {
+            owner: (get owner product),
+            status: "RECALLED",
+            timestamp: burn-block-height,
+        })
+        (map-set product-history-count product-id (+ current-history-count u1))
+
+        (print {
+            event: "recall",
+            product-id: product-id,
+            manufacturer: sender,
         })
         (ok true)
     )

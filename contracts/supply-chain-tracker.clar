@@ -12,6 +12,8 @@
 (define-constant err-transfer-expired (err u110))
 (define-constant err-not-certifier (err u111))
 (define-constant err-invalid-reputation (err u112))
+(define-constant err-already-deactivated (err u113))
+(define-constant err-not-deactivated (err u114))
 
 (define-data-var last-product-id uint u0)
 
@@ -88,6 +90,14 @@
     }
 )
 
+(define-map deactivation-log
+    principal
+    {
+        deactivated-at: uint,
+        reason: (string-ascii 100),
+    }
+)
+
 (define-map role-permissions
     (string-ascii 20)
     {
@@ -154,11 +164,35 @@
     )
 )
 
-(define-public (remove-participant (participant principal))
-    (begin
+(define-public (deactivate-participant
+        (participant principal)
+        (reason (string-ascii 100))
+    )
+    (let ((participant-data (unwrap! (map-get? participants participant) err-not-found)))
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (asserts! (is-some (map-get? participants participant)) err-not-found)
-        (ok (map-delete participants participant))
+        (asserts! (get active participant-data) err-already-deactivated)
+
+        (map-set participants participant
+            (merge participant-data { active: false })
+        )
+        (map-set deactivation-log participant {
+            deactivated-at: burn-block-height,
+            reason: reason,
+        })
+        (ok true)
+    )
+)
+
+(define-public (reactivate-participant (participant principal))
+    (let ((participant-data (unwrap! (map-get? participants participant) err-not-found)))
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (not (get active participant-data)) err-not-deactivated)
+
+        (map-set participants participant
+            (merge participant-data { active: true })
+        )
+        (map-delete deactivation-log participant)
+        (ok true)
     )
 )
 
@@ -696,4 +730,12 @@
         product-id: product-id,
         certifier: certifier,
     }))
+)
+
+(define-read-only (get-deactivation-log (participant principal))
+    (map-get? deactivation-log participant)
+)
+
+(define-read-only (was-participant-ever-active (participant principal))
+    (is-some (map-get? participants participant))
 )

@@ -14,6 +14,8 @@
 (define-constant err-invalid-reputation (err u112))
 (define-constant err-already-deactivated (err u113))
 (define-constant err-not-deactivated (err u114))
+(define-constant err-already-resolved (err u115))
+(define-constant err-recall-not-found (err u116))
 
 (define-data-var last-product-id uint u0)
 
@@ -92,6 +94,17 @@
 (define-map product-attribute-count
     uint
     uint
+)
+
+(define-map recall-records
+    uint
+    {
+        reason: (string-ascii 100),
+        recalled-at: uint,
+        resolved: bool,
+        resolved-at: uint,
+        resolution-notes: (string-ascii 100),
+    }
 )
 
 (define-map participant-reputation
@@ -609,7 +622,10 @@
     )
 )
 
-(define-public (recall-product (product-id uint))
+(define-public (recall-product
+        (product-id uint)
+        (reason (string-ascii 100))
+    )
     (let (
             (product (unwrap! (map-get? products product-id) err-not-found))
             (sender tx-sender)
@@ -676,10 +692,77 @@
             )
         )
 
+        (map-set recall-records product-id {
+            reason: reason,
+            recalled-at: burn-block-height,
+            resolved: false,
+            resolved-at: u0,
+            resolution-notes: "",
+        })
+
         (print {
             event: "recall",
             product-id: product-id,
             manufacturer: sender,
+            reason: reason,
+        })
+        (ok true)
+    )
+)
+
+(define-public (resolve-recall
+        (product-id uint)
+        (resolution-notes (string-ascii 100))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+            (current-history-count (default-to u0 (map-get? product-history-count product-id)))
+            (recall-record (unwrap! (map-get? recall-records product-id) err-recall-not-found))
+        )
+        (asserts! (is-eq (get manufacturer product) sender) err-manufacturer-only)
+        (asserts! (is-eq (get status product) "RECALLED") err-invalid-status)
+        (asserts! (not (get resolved recall-record)) err-already-resolved)
+        (asserts!
+            (default-to false
+                (map-get? valid-transitions {
+                    from: "RECALLED",
+                    to: "MANUFACTURED",
+                })
+            )
+            err-invalid-transition
+        )
+
+        (map-set recall-records product-id
+            (merge recall-record {
+                resolved: true,
+                resolved-at: burn-block-height,
+                resolution-notes: resolution-notes,
+            })
+        )
+
+        (map-set products product-id
+            (merge product {
+                status: "MANUFACTURED",
+                timestamp: burn-block-height,
+            })
+        )
+
+        (map-set product-history {
+            product-id: product-id,
+            index: current-history-count,
+        } {
+            owner: (get owner product),
+            status: "MANUFACTURED",
+            timestamp: burn-block-height,
+        })
+        (map-set product-history-count product-id (+ current-history-count u1))
+
+        (print {
+            event: "recall-resolved",
+            product-id: product-id,
+            manufacturer: sender,
+            resolution-notes: resolution-notes,
         })
         (ok true)
     )
@@ -833,6 +916,17 @@
 
 (define-read-only (get-deactivation-log (participant principal))
     (map-get? deactivation-log participant)
+)
+
+(define-read-only (get-recall-record (product-id uint))
+    (map-get? recall-records product-id)
+)
+
+(define-read-only (is-recall-resolved (product-id uint))
+    (match (map-get? recall-records product-id)
+        record (get resolved record)
+        false
+    )
 )
 
 (define-read-only (was-participant-ever-active (participant principal))

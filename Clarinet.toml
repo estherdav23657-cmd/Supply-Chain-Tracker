@@ -10,6 +10,11 @@ path = 'contracts/certifier-registry.clar'
 clarity_version = 3
 epoch = 'latest'
 
+[contracts.supply-chain-trait]
+path = 'contracts/supply-chain-trait.clar'
+clarity_version = 3
+epoch = 'latest'
+
 [contracts.supply-chain-tracker]
 path = 'contracts/supply-chain-tracker.clar'
 clarity_version = 3

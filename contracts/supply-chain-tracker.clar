@@ -7,6 +7,9 @@
 (define-constant err-manufacturer-only (err u105))
 (define-constant err-product-recalled (err u106))
 (define-constant err-role-forbidden (err u107))
+(define-constant err-invalid-transition (err u108))
+(define-constant err-no-pending-transfer (err u109))
+(define-constant err-transfer-expired (err u110))
 
 (define-data-var last-product-id uint u0)
 
@@ -45,6 +48,19 @@
 (define-map product-history-count
     uint
     uint
+)
+
+(define-map pending-transfers
+    uint
+    { to: principal, expires-at: uint }
+)
+
+(define-map valid-transitions
+    {
+        from: (string-ascii 50),
+        to: (string-ascii 50),
+    }
+    bool
 )
 
 (define-map role-permissions
@@ -167,7 +183,7 @@
     )
 )
 
-(define-public (transfer-product
+(define-public (initiate-transfer
         (product-id uint)
         (new-owner principal)
     )
@@ -176,18 +192,47 @@
             (sender tx-sender)
             (sender-participant (unwrap! (map-get? participants sender) err-unauthorized))
             (receiver-participant (unwrap! (map-get? participants new-owner) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role sender-participant)) err-role-forbidden))
-            (current-history-count (default-to u0 (map-get? product-history-count product-id)))
+            (sender-role-cap (unwrap! (map-get? role-permissions (get role sender-participant)) err-unauthorized))
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
-        (asserts! (get active sender-participant) err-unauthorized)
-        (asserts! (get active receiver-participant) err-unauthorized)
+        (asserts! (is-eq (get active sender-participant) true) err-unauthorized)
+        (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
         (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
-        (asserts! (get can-transfer role-cap) err-role-forbidden)
+        (asserts! (get can-transfer sender-role-cap) err-role-forbidden)
+        (asserts! (default-to false (map-get? valid-transitions { from: (get status product), to: "TRANSFERRED" })) err-invalid-transition)
+
+        (map-set pending-transfers product-id {
+            to: new-owner,
+            expires-at: (+ burn-block-height u144)
+        })
+
+        (print {
+            event: "transfer-initiated",
+            product-id: product-id,
+            from: sender,
+            to: new-owner,
+            expires-at: (+ burn-block-height u144),
+        })
+        (ok true)
+    )
+)
+
+(define-public (accept-transfer (product-id uint))
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer))
+            (receiver tx-sender)
+            (receiver-participant (unwrap! (map-get? participants receiver) err-unauthorized))
+            (current-history-count (default-to u0 (map-get? product-history-count product-id)))
+        )
+        (asserts! (is-eq (get to pending-transfer) receiver) err-unauthorized)
+        (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
+        (asserts! (< burn-block-height (get expires-at pending-transfer)) err-transfer-expired)
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
 
         (map-set products product-id
             (merge product {
-                owner: new-owner,
+                owner: receiver,
                 status: "TRANSFERRED",
                 timestamp: burn-block-height,
             })
@@ -197,17 +242,53 @@
             product-id: product-id,
             index: current-history-count,
         } {
-            owner: new-owner,
+            owner: receiver,
             status: "TRANSFERRED",
             timestamp: burn-block-height,
         })
         (map-set product-history-count product-id (+ current-history-count u1))
+        
+        (map-delete pending-transfers product-id)
 
         (print {
-            event: "transfer",
+            event: "transfer-accepted",
             product-id: product-id,
-            from: sender,
-            to: new-owner,
+            to: receiver,
+        })
+        (ok true)
+    )
+)
+
+(define-public (cancel-transfer (product-id uint))
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+        )
+        (asserts! (is-eq (get owner product) sender) err-unauthorized)
+        (asserts! (is-some (map-get? pending-transfers product-id)) err-no-pending-transfer)
+
+        (map-delete pending-transfers product-id)
+
+        (print {
+            event: "transfer-canceled",
+            product-id: product-id,
+            by: sender,
+        })
+        (ok true)
+    )
+)
+
+(define-public (expire-transfer (product-id uint))
+    (let (
+            (pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer))
+        )
+        (asserts! (>= burn-block-height (get expires-at pending-transfer)) err-transfer-expired)
+
+        (map-delete pending-transfers product-id)
+
+        (print {
+            event: "transfer-expired",
+            product-id: product-id,
         })
         (ok true)
     )
@@ -378,13 +459,6 @@
     )
 )
 
-(define-read-only (get-role-permissions (role (string-ascii 20)))
-    (map-get? role-permissions role)
-)
-
-(define-read-only (get-caller-permissions)
-    (match (map-get? participants tx-sender)
-        participant-data (map-get? role-permissions (get role participant-data))
-        none
-    )
+(define-read-only (get-pending-transfer (product-id uint))
+    (map-get? pending-transfers product-id)
 )

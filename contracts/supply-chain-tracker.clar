@@ -1,3 +1,8 @@
+;; supply-chain-tracker.clar
+;; Implements the standard supply chain interface
+
+(impl-trait .supply-chain-trait.supply-chain)
+
 (define-constant contract-owner tx-sender)
 (define-constant err-owner-only (err u100))
 (define-constant err-not-found (err u101))

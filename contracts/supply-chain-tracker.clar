@@ -10,6 +10,7 @@
 (define-constant err-invalid-transition (err u108))
 (define-constant err-no-pending-transfer (err u109))
 (define-constant err-transfer-expired (err u110))
+(define-constant err-not-certifier (err u111))
 
 (define-data-var last-product-id uint u0)
 
@@ -52,7 +53,10 @@
 
 (define-map pending-transfers
     uint
-    { to: principal, expires-at: uint }
+    {
+        to: principal,
+        expires-at: uint,
+    }
 )
 
 (define-map valid-transitions
@@ -61,6 +65,17 @@
         to: (string-ascii 50),
     }
     bool
+)
+
+(define-map product-certifications
+    {
+        product-id: uint,
+        certifier: principal,
+    }
+    {
+        label: (string-ascii 50),
+        issued-at: uint,
+    }
 )
 
 (define-map role-permissions
@@ -153,7 +168,9 @@
             (product-id (+ (var-get last-product-id) u1))
             (sender tx-sender)
             (participant-curr (unwrap! (map-get? participants sender) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role participant-curr)) err-role-forbidden))
+            (role-cap (unwrap! (map-get? role-permissions (get role participant-curr))
+                err-role-forbidden
+            ))
         )
         (asserts! (get active participant-curr) err-unauthorized)
         (asserts! (get can-mint role-cap) err-role-forbidden)
@@ -192,18 +209,30 @@
             (sender tx-sender)
             (sender-participant (unwrap! (map-get? participants sender) err-unauthorized))
             (receiver-participant (unwrap! (map-get? participants new-owner) err-unauthorized))
-            (sender-role-cap (unwrap! (map-get? role-permissions (get role sender-participant)) err-unauthorized))
+            (sender-role-cap (unwrap! (map-get? role-permissions (get role sender-participant))
+                err-unauthorized
+            ))
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
         (asserts! (is-eq (get active sender-participant) true) err-unauthorized)
         (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
-        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
+        (asserts! (not (is-eq (get status product) "RECALLED"))
+            err-product-recalled
+        )
         (asserts! (get can-transfer sender-role-cap) err-role-forbidden)
-        (asserts! (default-to false (map-get? valid-transitions { from: (get status product), to: "TRANSFERRED" })) err-invalid-transition)
+        (asserts!
+            (default-to false
+                (map-get? valid-transitions {
+                    from: (get status product),
+                    to: "TRANSFERRED",
+                })
+            )
+            err-invalid-transition
+        )
 
         (map-set pending-transfers product-id {
             to: new-owner,
-            expires-at: (+ burn-block-height u144)
+            expires-at: (+ burn-block-height u144),
         })
 
         (print {
@@ -220,15 +249,21 @@
 (define-public (accept-transfer (product-id uint))
     (let (
             (product (unwrap! (map-get? products product-id) err-not-found))
-            (pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer))
+            (pending-transfer (unwrap! (map-get? pending-transfers product-id)
+                err-no-pending-transfer
+            ))
             (receiver tx-sender)
             (receiver-participant (unwrap! (map-get? participants receiver) err-unauthorized))
             (current-history-count (default-to u0 (map-get? product-history-count product-id)))
         )
         (asserts! (is-eq (get to pending-transfer) receiver) err-unauthorized)
         (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
-        (asserts! (< burn-block-height (get expires-at pending-transfer)) err-transfer-expired)
-        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
+        (asserts! (< burn-block-height (get expires-at pending-transfer))
+            err-transfer-expired
+        )
+        (asserts! (not (is-eq (get status product) "RECALLED"))
+            err-product-recalled
+        )
 
         (map-set products product-id
             (merge product {
@@ -247,7 +282,7 @@
             timestamp: burn-block-height,
         })
         (map-set product-history-count product-id (+ current-history-count u1))
-        
+
         (map-delete pending-transfers product-id)
 
         (print {
@@ -265,7 +300,9 @@
             (sender tx-sender)
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
-        (asserts! (is-some (map-get? pending-transfers product-id)) err-no-pending-transfer)
+        (asserts! (is-some (map-get? pending-transfers product-id))
+            err-no-pending-transfer
+        )
 
         (map-delete pending-transfers product-id)
 
@@ -279,16 +316,71 @@
 )
 
 (define-public (expire-transfer (product-id uint))
-    (let (
-            (pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer))
+    (let ((pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer)))
+        (asserts! (>= burn-block-height (get expires-at pending-transfer))
+            err-transfer-expired
         )
-        (asserts! (>= burn-block-height (get expires-at pending-transfer)) err-transfer-expired)
 
         (map-delete pending-transfers product-id)
 
         (print {
             event: "transfer-expired",
             product-id: product-id,
+        })
+        (ok true)
+    )
+)
+
+(define-public (attest-product
+        (product-id uint)
+        (label (string-ascii 50))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (certifier tx-sender)
+            (is-auth-certifier (unwrap! (contract-call? .certifier-registry is-certifier certifier)
+                err-not-certifier
+            ))
+        )
+        (asserts! is-auth-certifier err-not-certifier)
+
+        (map-set product-certifications {
+            product-id: product-id,
+            certifier: certifier,
+        } {
+            label: label,
+            issued-at: burn-block-height,
+        })
+
+        (print {
+            event: "product-attested",
+            product-id: product-id,
+            certifier: certifier,
+            label: label,
+        })
+        (ok true)
+    )
+)
+
+(define-public (revoke-certification (product-id uint))
+    (let ((certifier tx-sender))
+        (asserts!
+            (is-some (map-get? product-certifications {
+                product-id: product-id,
+                certifier: certifier,
+            }))
+            err-not-found
+        )
+
+        (map-delete product-certifications {
+            product-id: product-id,
+            certifier: certifier,
+        })
+
+        (print {
+            event: "certification-revoked",
+            product-id: product-id,
+            certifier: certifier,
         })
         (ok true)
     )
@@ -302,12 +394,16 @@
             (product (unwrap! (map-get? products product-id) err-not-found))
             (sender tx-sender)
             (participant (unwrap! (map-get? participants sender) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role participant)) err-role-forbidden))
+            (role-cap (unwrap! (map-get? role-permissions (get role participant))
+                err-role-forbidden
+            ))
             (current-history-count (default-to u0 (map-get? product-history-count product-id)))
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
         (asserts! (get active participant) err-unauthorized)
-        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
+        (asserts! (not (is-eq (get status product) "RECALLED"))
+            err-product-recalled
+        )
         (asserts! (get can-update-status role-cap) err-role-forbidden)
 
         (map-set products product-id
@@ -461,4 +557,24 @@
 
 (define-read-only (get-pending-transfer (product-id uint))
     (map-get? pending-transfers product-id)
+)
+
+(define-read-only (get-certification
+        (product-id uint)
+        (certifier principal)
+    )
+    (map-get? product-certifications {
+        product-id: product-id,
+        certifier: certifier,
+    })
+)
+
+(define-read-only (is-certified
+        (product-id uint)
+        (certifier principal)
+    )
+    (is-some (map-get? product-certifications {
+        product-id: product-id,
+        certifier: certifier,
+    }))
 )

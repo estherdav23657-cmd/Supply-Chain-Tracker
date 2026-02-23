@@ -11,6 +11,7 @@
 (define-constant err-no-pending-transfer (err u109))
 (define-constant err-transfer-expired (err u110))
 (define-constant err-not-certifier (err u111))
+(define-constant err-invalid-reputation (err u112))
 
 (define-data-var last-product-id uint u0)
 
@@ -78,6 +79,15 @@
     }
 )
 
+(define-map participant-reputation
+    principal
+    {
+        transfers-completed: uint,
+        transfers-failed: uint,
+        recalls-involved: uint,
+    }
+)
+
 (define-map role-permissions
     (string-ascii 20)
     {
@@ -131,6 +141,11 @@
         (asserts! (is-none (map-get? participants participant))
             err-already-exists
         )
+        (map-set participant-reputation participant {
+            transfers-completed: u0,
+            transfers-failed: u0,
+            recalls-involved: u0,
+        })
         (ok (map-set participants participant {
             name: name,
             role: role,
@@ -285,6 +300,32 @@
 
         (map-delete pending-transfers product-id)
 
+        ;; Update reputation for both sender (the previous owner) and receiver
+        (let (
+                (sender (get owner product))
+                (sender-rep (default-to {
+                    transfers-completed: u0,
+                    transfers-failed: u0,
+                    recalls-involved: u0,
+                }
+                    (map-get? participant-reputation sender)
+                ))
+                (receiver-rep (default-to {
+                    transfers-completed: u0,
+                    transfers-failed: u0,
+                    recalls-involved: u0,
+                }
+                    (map-get? participant-reputation receiver)
+                ))
+            )
+            (map-set participant-reputation sender
+                (merge sender-rep { transfers-completed: (+ (get transfers-completed sender-rep) u1) })
+            )
+            (map-set participant-reputation receiver
+                (merge receiver-rep { transfers-completed: (+ (get transfers-completed receiver-rep) u1) })
+            )
+        )
+
         (print {
             event: "transfer-accepted",
             product-id: product-id,
@@ -316,12 +357,29 @@
 )
 
 (define-public (expire-transfer (product-id uint))
-    (let ((pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer)))
+    (let (
+            (pending-transfer (unwrap! (map-get? pending-transfers product-id)
+                err-no-pending-transfer
+            ))
+            (receiver (get to pending-transfer))
+            (receiver-rep (default-to {
+                transfers-completed: u0,
+                transfers-failed: u0,
+                recalls-involved: u0,
+            }
+                (map-get? participant-reputation receiver)
+            ))
+        )
         (asserts! (>= burn-block-height (get expires-at pending-transfer))
             err-transfer-expired
         )
 
         (map-delete pending-transfers product-id)
+
+        ;; Penalize the intended receiver for letting it expire
+        (map-set participant-reputation receiver
+            (merge receiver-rep { transfers-failed: (+ (get transfers-failed receiver-rep) u1) })
+        )
 
         (print {
             event: "transfer-expired",
@@ -469,6 +527,36 @@
         })
         (map-set product-history-count product-id (+ current-history-count u1))
 
+        ;; Update recall-involved penalty for the manufacturer and current owner
+        (let (
+                (mfg sender)
+                (curr-owner (get owner product))
+                (mfg-rep (default-to {
+                    transfers-completed: u0,
+                    transfers-failed: u0,
+                    recalls-involved: u0,
+                }
+                    (map-get? participant-reputation mfg)
+                ))
+                (owner-rep (default-to {
+                    transfers-completed: u0,
+                    transfers-failed: u0,
+                    recalls-involved: u0,
+                }
+                    (map-get? participant-reputation curr-owner)
+                ))
+            )
+            (map-set participant-reputation mfg
+                (merge mfg-rep { recalls-involved: (+ (get recalls-involved mfg-rep) u1) })
+            )
+            (if (not (is-eq mfg curr-owner))
+                (map-set participant-reputation curr-owner
+                    (merge owner-rep { recalls-involved: (+ (get recalls-involved owner-rep) u1) })
+                )
+                true ;; Do nothing if the manufacturer still owns it (already penalized)
+            )
+        )
+
         (print {
             event: "recall",
             product-id: product-id,
@@ -552,6 +640,37 @@
     (match (map-get? products product-id)
         product-data (ok (get status product-data))
         err-not-found
+    )
+)
+
+(define-read-only (get-reputation (participant principal))
+    (default-to {
+        transfers-completed: u0,
+        transfers-failed: u0,
+        recalls-involved: u0,
+    }
+        (map-get? participant-reputation participant)
+    )
+)
+
+(define-public (slash-reputation
+        (participant principal)
+        (failed-penalty uint)
+        (recall-penalty uint)
+    )
+    (let ((rep (default-to {
+            transfers-completed: u0,
+            transfers-failed: u0,
+            recalls-involved: u0,
+        }
+            (map-get? participant-reputation participant)
+        )))
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (ok (map-set participant-reputation participant {
+            transfers-completed: (get transfers-completed rep),
+            transfers-failed: (+ (get transfers-failed rep) failed-penalty),
+            recalls-involved: (+ (get recalls-involved rep) recall-penalty),
+        }))
     )
 )
 

@@ -81,6 +81,19 @@
     }
 )
 
+(define-map product-attributes
+    {
+        product-id: uint,
+        key: (string-ascii 30),
+    }
+    (string-ascii 100)
+)
+
+(define-map product-attribute-count
+    uint
+    uint
+)
+
 (define-map participant-reputation
     principal
     {
@@ -423,6 +436,78 @@
     )
 )
 
+(define-public (set-product-attribute
+        (product-id uint)
+        (key (string-ascii 30))
+        (value (string-ascii 100))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+            (current-count (default-to u0 (map-get? product-attribute-count product-id)))
+            (is-new-key (is-none (map-get? product-attributes {
+                product-id: product-id,
+                key: key,
+            })))
+        )
+        (asserts! (is-eq (get owner product) sender) err-unauthorized)
+
+        (map-set product-attributes {
+            product-id: product-id,
+            key: key,
+        }
+            value
+        )
+
+        (if is-new-key
+            (map-set product-attribute-count product-id (+ current-count u1))
+            true
+        )
+
+        (print {
+            event: "attribute-set",
+            product-id: product-id,
+            key: key,
+            value: value,
+        })
+        (ok true)
+    )
+)
+
+(define-public (remove-product-attribute
+        (product-id uint)
+        (key (string-ascii 30))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (sender tx-sender)
+            (current-count (default-to u0 (map-get? product-attribute-count product-id)))
+        )
+        (asserts! (is-eq (get owner product) sender) err-unauthorized)
+        (asserts!
+            (is-some (map-get? product-attributes {
+                product-id: product-id,
+                key: key,
+            }))
+            err-not-found
+        )
+
+        (map-delete product-attributes {
+            product-id: product-id,
+            key: key,
+        })
+
+        (map-set product-attribute-count product-id (- current-count u1))
+
+        (print {
+            event: "attribute-removed",
+            product-id: product-id,
+            key: key,
+        })
+        (ok true)
+    )
+)
+
 (define-public (attest-product
         (product-id uint)
         (label (string-ascii 50))
@@ -730,6 +815,20 @@
         product-id: product-id,
         certifier: certifier,
     }))
+)
+
+(define-read-only (get-product-attribute
+        (product-id uint)
+        (key (string-ascii 30))
+    )
+    (map-get? product-attributes {
+        product-id: product-id,
+        key: key,
+    })
+)
+
+(define-read-only (get-product-attribute-count (product-id uint))
+    (default-to u0 (map-get? product-attribute-count product-id))
 )
 
 (define-read-only (get-deactivation-log (participant principal))

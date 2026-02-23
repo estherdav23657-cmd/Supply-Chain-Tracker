@@ -6,7 +6,6 @@
 (define-constant err-invalid-status (err u104))
 (define-constant err-manufacturer-only (err u105))
 (define-constant err-product-recalled (err u106))
-(define-constant err-role-forbidden (err u107))
 
 (define-data-var last-product-id uint u0)
 
@@ -47,49 +46,6 @@
     uint
 )
 
-(define-map role-permissions
-    (string-ascii 20)
-    {
-        can-mint: bool,
-        can-transfer: bool,
-        can-update-status: bool,
-    }
-)
-
-(map-set role-permissions "MANUFACTURER" {
-    can-mint: true,
-    can-transfer: true,
-    can-update-status: true,
-})
-
-(map-set role-permissions "DISTRIBUTOR" {
-    can-mint: false,
-    can-transfer: true,
-    can-update-status: true,
-})
-
-(map-set role-permissions "RETAILER" {
-    can-mint: false,
-    can-transfer: false,
-    can-update-status: true,
-})
-
-(define-public (set-role-permission
-        (role (string-ascii 20))
-        (can-mint bool)
-        (can-transfer bool)
-        (can-update-status bool)
-    )
-    (begin
-        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (ok (map-set role-permissions role {
-            can-mint: can-mint,
-            can-transfer: can-transfer,
-            can-update-status: can-update-status,
-        }))
-    )
-)
-
 (define-public (add-participant
         (participant principal)
         (name (string-ascii 50))
@@ -116,31 +72,13 @@
     )
 )
 
-(define-public (set-valid-transition
-        (from (string-ascii 50))
-        (to (string-ascii 50))
-        (is-valid bool)
-    )
-    (begin
-        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-        (ok (map-set valid-transitions {
-            from: from,
-            to: to,
-        }
-            is-valid
-        ))
-    )
-)
-
 (define-public (mint-product (name (string-ascii 50)))
     (let (
             (product-id (+ (var-get last-product-id) u1))
             (sender tx-sender)
             (participant-curr (unwrap! (map-get? participants sender) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role participant-curr)) err-role-forbidden))
         )
-        (asserts! (get active participant-curr) err-unauthorized)
-        (asserts! (get can-mint role-cap) err-role-forbidden)
+        (asserts! (is-eq (get active participant-curr) true) err-unauthorized)
         (map-insert products product-id {
             name: name,
             manufacturer: sender,
@@ -176,20 +114,18 @@
             (sender tx-sender)
             (sender-participant (unwrap! (map-get? participants sender) err-unauthorized))
             (receiver-participant (unwrap! (map-get? participants new-owner) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role sender-participant)) err-role-forbidden))
             (current-history-count (default-to u0 (map-get? product-history-count product-id)))
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
-        (asserts! (get active sender-participant) err-unauthorized)
-        (asserts! (get active receiver-participant) err-unauthorized)
+        (asserts! (is-eq (get active sender-participant) true) err-unauthorized)
+        (asserts! (is-eq (get active receiver-participant) true) err-unauthorized)
         (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
-        (asserts! (get can-transfer role-cap) err-role-forbidden)
 
         (map-set products product-id
             (merge product {
                 owner: new-owner,
                 status: "TRANSFERRED",
-                timestamp: burn-block-height,
+                timestamp: stacks-block-height,
             })
         )
 
@@ -221,13 +157,11 @@
             (product (unwrap! (map-get? products product-id) err-not-found))
             (sender tx-sender)
             (participant (unwrap! (map-get? participants sender) err-unauthorized))
-            (role-cap (unwrap! (map-get? role-permissions (get role participant)) err-role-forbidden))
             (current-history-count (default-to u0 (map-get? product-history-count product-id)))
         )
         (asserts! (is-eq (get owner product) sender) err-unauthorized)
-        (asserts! (get active participant) err-unauthorized)
+        (asserts! (is-eq (get active participant) true) err-unauthorized)
         (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
-        (asserts! (get can-update-status role-cap) err-role-forbidden)
 
         (map-set products product-id
             (merge product {
@@ -262,18 +196,7 @@
             (current-history-count (default-to u0 (map-get? product-history-count product-id)))
         )
         (asserts! (is-eq (get manufacturer product) sender) err-manufacturer-only)
-        (asserts! (not (is-eq (get status product) "RECALLED"))
-            err-product-recalled
-        )
-        (asserts!
-            (default-to false
-                (map-get? valid-transitions {
-                    from: (get status product),
-                    to: "RECALLED",
-                })
-            )
-            err-invalid-transition
-        )
+        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
 
         (map-set products product-id
             (merge product {
@@ -334,29 +257,6 @@
     )
 )
 
-(define-read-only (get-role-permissions (role (string-ascii 20)))
-    (map-get? role-permissions role)
-)
-
-(define-read-only (get-caller-permissions)
-    (match (map-get? participants tx-sender)
-        participant-data (map-get? role-permissions (get role participant-data))
-        none
-    )
-)
-
-(define-read-only (is-valid-transition
-        (from (string-ascii 50))
-        (to (string-ascii 50))
-    )
-    (default-to false
-        (map-get? valid-transitions {
-            from: from,
-            to: to,
-        })
-    )
-)
-
 (define-read-only (get-owner-of-product (product-id uint))
     (match (map-get? products product-id)
         product-data (ok (get owner product-data))
@@ -378,13 +278,3 @@
     )
 )
 
-(define-read-only (get-role-permissions (role (string-ascii 20)))
-    (map-get? role-permissions role)
-)
-
-(define-read-only (get-caller-permissions)
-    (match (map-get? participants tx-sender)
-        participant-data (map-get? role-permissions (get role participant-data))
-        none
-    )
-)

@@ -5,6 +5,11 @@ authors = []
 telemetry = true
 cache_dir = '.\.cache'
 requirements = []
+[contracts.certifier-registry]
+path = 'contracts/certifier-registry.clar'
+clarity_version = 3
+epoch = 'latest'
+
 [contracts.supply-chain-tracker]
 path = 'contracts/supply-chain-tracker.clar'
 clarity_version = 3

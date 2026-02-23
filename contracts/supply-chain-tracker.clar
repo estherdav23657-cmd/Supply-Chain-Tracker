@@ -937,3 +937,41 @@
 (define-read-only (was-participant-ever-active (participant principal))
     (is-some (map-get? participants participant))
 )
+
+(define-read-only (get-products-page (start-id uint))
+    (map get-product
+        (list
+            start-id
+            (+ start-id u1)
+            (+ start-id u2)
+            (+ start-id u3)
+            (+ start-id u4)
+            (+ start-id u5)
+            (+ start-id u6)
+            (+ start-id u7)
+            (+ start-id u8)
+            (+ start-id u9)
+        )
+    )
+)
+
+(define-private (get-product-history-tuple (key { product-id: uint, index: uint }))
+    (get-product-history (get product-id key) (get index key))
+)
+
+(define-read-only (get-product-history-page (product-id uint) (start-index uint))
+    (map get-product-history-tuple
+        (list
+            { product-id: product-id, index: start-index }
+            { product-id: product-id, index: (+ start-index u1) }
+            { product-id: product-id, index: (+ start-index u2) }
+            { product-id: product-id, index: (+ start-index u3) }
+            { product-id: product-id, index: (+ start-index u4) }
+            { product-id: product-id, index: (+ start-index u5) }
+            { product-id: product-id, index: (+ start-index u6) }
+            { product-id: product-id, index: (+ start-index u7) }
+            { product-id: product-id, index: (+ start-index u8) }
+            { product-id: product-id, index: (+ start-index u9) }
+        )
+    )
+)

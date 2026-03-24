@@ -21,6 +21,7 @@
 (define-constant err-not-deactivated (err u114))
 (define-constant err-already-resolved (err u115))
 (define-constant err-recall-not-found (err u116))
+(define-constant err-no-dispute (err u117))
 
 (define-data-var last-product-id uint u0)
 
@@ -59,6 +60,16 @@
 (define-map product-history-count
     uint
     uint
+)
+
+(define-map transfer-disputes
+    uint
+    {
+        sender: principal,
+        receiver: principal,
+        reason: (string-ascii 100),
+        timestamp: uint
+    }
 )
 
 (define-map pending-transfers
@@ -449,6 +460,43 @@
         (print {
             event: "transfer-expired",
             product-id: product-id,
+        })
+        (ok true)
+    )
+)
+
+(define-public (dispute-transfer
+        (product-id uint)
+        (reason (string-ascii 100))
+    )
+    (let (
+            (product (unwrap! (map-get? products product-id) err-not-found))
+            (pending-transfer (unwrap! (map-get? pending-transfers product-id) err-no-pending-transfer))
+            (receiver tx-sender)
+            (sender (get owner product))
+            (sender-rep (default-to { transfers-completed: u0, transfers-failed: u0, recalls-involved: u0 }
+                (map-get? participant-reputation sender)))
+        )
+        (asserts! (is-eq (get to pending-transfer) receiver) err-unauthorized)
+        
+        (map-delete pending-transfers product-id)
+        
+        (map-set transfer-disputes product-id {
+            sender: sender,
+            receiver: receiver,
+            reason: reason,
+            timestamp: burn-block-height
+        })
+        
+        (map-set participant-reputation sender
+            (merge sender-rep { transfers-failed: (+ (get transfers-failed sender-rep) u1) })
+        )
+        
+        (print {
+            event: "transfer-disputed",
+            product-id: product-id,
+            by: receiver,
+            reason: reason
         })
         (ok true)
     )
@@ -917,6 +965,10 @@
 
 (define-read-only (get-product-attribute-count (product-id uint))
     (default-to u0 (map-get? product-attribute-count product-id))
+)
+
+(define-read-only (get-transfer-dispute (product-id uint))
+    (map-get? transfer-disputes product-id)
 )
 
 (define-read-only (get-deactivation-log (participant principal))

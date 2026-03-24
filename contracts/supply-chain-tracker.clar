@@ -21,6 +21,8 @@
 (define-constant err-not-deactivated (err u114))
 (define-constant err-already-resolved (err u115))
 (define-constant err-recall-not-found (err u116))
+(define-constant err-already-bundled (err u118))
+(define-constant err-parent-is-child (err u119))
 
 (define-data-var last-product-id uint u0)
 
@@ -127,6 +129,11 @@
         deactivated-at: uint,
         reason: (string-ascii 100),
     }
+)
+
+(define-map product-bundles
+    uint
+    uint
 )
 
 (define-map role-permissions
@@ -773,6 +780,54 @@
     )
 )
 
+(define-public (bundle-product
+        (parent-id uint)
+        (child-id uint)
+    )
+    (let (
+            (parent (unwrap! (map-get? products parent-id) err-not-found))
+            (child (unwrap! (map-get? products child-id) err-not-found))
+            (sender tx-sender)
+            (participant (unwrap! (map-get? participants sender) err-unauthorized))
+            (current-history-count (default-to u0 (map-get? product-history-count child-id)))
+        )
+        (asserts! (is-eq (get owner parent) sender) err-unauthorized)
+        (asserts! (is-eq (get owner child) sender) err-unauthorized)
+        (asserts! (get active participant) err-unauthorized)
+        
+        (asserts! (is-none (map-get? product-bundles child-id)) err-already-bundled)
+        (asserts! (not (is-eq parent-id child-id)) err-parent-is-child)
+        
+        (map-set product-bundles child-id parent-id)
+        
+        (map-set products child-id
+            (merge child {
+                status: "BUNDLED",
+                timestamp: burn-block-height
+            })
+        )
+        
+        (map-set product-history {
+            product-id: child-id,
+            index: current-history-count
+        } {
+            owner: sender,
+            status: "BUNDLED",
+            timestamp: burn-block-height
+        })
+        (map-set product-history-count child-id (+ current-history-count u1))
+        
+        (map-delete pending-transfers child-id)
+        
+        (print {
+            event: "product-bundled",
+            parent-id: parent-id,
+            child-id: child-id
+        })
+        (ok true)
+    )
+)
+
 (define-read-only (get-product (product-id uint))
     (map-get? products product-id)
 )
@@ -797,6 +852,10 @@
 
 (define-read-only (get-last-product-id)
     (ok (var-get last-product-id))
+)
+
+(define-read-only (get-product-parent (child-id uint))
+    (map-get? product-bundles child-id)
 )
 
 (define-read-only (is-participant-active (participant principal))

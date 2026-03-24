@@ -17,7 +17,6 @@
 (define-constant err-already-resolved (err u115))
 (define-constant err-recall-not-found (err u116))
 
-
 (define-data-var last-product-id uint u0)
 
 (define-map participants
@@ -124,18 +123,6 @@
         reason: (string-ascii 100),
     }
 )
-
-(define-map maintenance-records
-    { product-id: uint, record-id: uint }
-    { servicer: principal, description: (string-ascii 100), timestamp: uint }
-)
-
-(define-map product-maintenance-count
-    uint
-    uint
-)
-
-
 
 (define-map role-permissions
     (string-ascii 20)
@@ -781,42 +768,6 @@
     )
 )
 
-(define-public (record-maintenance
-        (product-id uint)
-        (description (string-ascii 100))
-    )
-    (let (
-            (product (unwrap! (map-get? products product-id) err-not-found))
-            (sender tx-sender)
-            (current-count (default-to u0 (map-get? product-maintenance-count product-id)))
-            (participant (unwrap! (map-get? participants sender) err-unauthorized))
-        )
-        (asserts! (get active participant) err-unauthorized)
-        (asserts! (not (is-eq (get status product) "RECALLED")) err-product-recalled)
-        
-        (map-set maintenance-records {
-            product-id: product-id,
-            record-id: current-count
-        } {
-            servicer: sender,
-            description: description,
-            timestamp: burn-block-height
-        })
-        
-        (map-set product-maintenance-count product-id (+ current-count u1))
-        
-        (print {
-            event: "maintenance-recorded",
-            product-id: product-id,
-            record-id: current-count,
-            servicer: sender
-        })
-        (ok true)
-    )
-)
-
-
-
 (define-read-only (get-product (product-id uint))
     (map-get? products product-id)
 )
@@ -842,12 +793,6 @@
 (define-read-only (get-last-product-id)
     (ok (var-get last-product-id))
 )
-
-(define-read-only (get-maintenance-record (product-id uint) (record-id uint))
-    (map-get? maintenance-records { product-id: product-id, record-id: record-id })
-)
-
-
 
 (define-read-only (is-participant-active (participant principal))
     (match (map-get? participants participant)
